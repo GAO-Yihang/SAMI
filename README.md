@@ -42,22 +42,29 @@ Start from [configs/default.yaml](configs/default.yaml) for two modalities or
 [configs/tri_modal_default.yaml](configs/tri_modal_default.yaml) for three
 modalities. Both templates use the full-graph backend. Update:
 
-- `data`: training, validation, and inference paths (`train_dir`, `val_dir`,
-  `infer_dir`), plus the feature and target keys above.
+- `data`: training and inference paths (`train_dir`, `infer_dir`).
 - `model`, `train`, and `loss`: model settings, device, epochs, learning rate,
   output directory, and loss weights for your data.
 - `infer`: checkpoint and output paths.
 
-Relative paths resolve from the working directory. Dimensions set to `null`
-are inferred from the first sample; keep `data.batch_size: 1`.
+If a full-graph checkpoint contains a saved configuration, inference reads its
+input and output paths from that configuration, even if those paths have since
+changed in the YAML. To use new paths, pass the corresponding options:
+
+| Path to change | Command-line option | Script |
+| --- | --- | --- |
+| Input H5AD file or directory | `--input_dir` | `infer.py`, `tri_infer.py` |
+| Output `.pt` result file | `--output_path` | `infer.py`, `tri_infer.py` |
+| Output H5AD directory | `--output_dir_h5ad` | `infer.py` |
+| Output H5AD file | `--output_path_h5ad` | `tri_infer.py` |
 
 The default backend is `full`; select `--backend tiled` for tiled inputs.
 View the available options with:
 
 ```bash
 python train.py --help
-python infer.py --backend tiled --help
-python tri_train.py --backend tiled --help
+python infer.py --help
+python tri_train.py --help
 python tri_infer.py --help
 ```
 
@@ -75,55 +82,61 @@ python tri_infer.py --config configs/tri_modal_default.yaml
 
 ## Using the released data
 
-Paths remain relative to the process working directory, not the YAML or code
-directory. For the released datasets, run from the download root containing
-`sami/Mouse_Embryonic_Brain`, `sami/Xenium_Renal_Carcinoma`, and
-`sami/CRC_VisiumHD`. The code can live in a separate directory and does not
-require the original research repository on `PYTHONPATH`.
+Download the processed inputs, trained checkpoints, and configurations from
+[Hugging Face](https://huggingface.co/datasets/GAO612/SAMI).
+Place the downloaded dataset folders under `data/sami/` in this repository,
+for example, `data/sami/Xenium_Renal_Carcinoma/`.
 
-The released Xenium renal experiment uses RNA+protein. Examples of training
-with a released configuration and inference with released weights:
+Run all examples below from `data/` so the saved `sami/...` paths resolve
+correctly. From the repository root:
 
 ```bash
-SAMI_CODE=/path/to/sami-code
-cd /path/to/hf_upload
+cd data
+```
 
-python "$SAMI_CODE/train.py" --backend tiled \
-  --config sami/Xenium_Renal_Carcinoma/default.yaml
+### Inference with released checkpoints
 
-python "$SAMI_CODE/infer.py" \
+```bash
+# Mouse embryonic brain: RNA + ATAC, full graph
+python ../infer.py \
   --config sami/Mouse_Embryonic_Brain/E11_0-S1/default.yaml \
   --checkpoint sami/Mouse_Embryonic_Brain/E11_0-S1/best.pt \
   --input_dir sami/Mouse_Embryonic_Brain/E11_0-S1/processed_E11_0-S1.h5ad \
   --output_path outputs/brain_E11_0-S1_embeddings.pt \
   --output_path_h5ad outputs/brain_E11_0-S1_infer_results.h5ad
 
-python "$SAMI_CODE/infer.py" --backend tiled \
+# Xenium renal carcinoma: RNA + protein, tiled
+python ../infer.py --backend tiled \
   --checkpoint sami/Xenium_Renal_Carcinoma/best.pt \
   --output outputs/renal_infer_results.h5ad
 
-python "$SAMI_CODE/infer.py" --backend tiled \
+# CRC Visium HD: RNA + H&E, tiled
+python ../infer.py --backend tiled \
   --checkpoint sami/CRC_VisiumHD/P1CRC/best.pt \
   --output outputs/P1CRC_infer_results.h5ad
 ```
 
-CRC contains five samples: P1CRC, P2CRC, P5CRC, P3NAT, and P5NAT. They share the
-same learned model weights. Each sample's checkpoint contains the manifest
-configuration for that sample; use it for single-sample inference. The root
-checkpoint and root `default.yaml` reference the joint training manifest. Tile
-inference expects one sample's cell index space, so use the sample checkpoints
-to infer the five samples separately. To start joint training with the released
-configuration from the same data root:
+CRC inference uses a checkpoint from each sample's directory. Replace `P1CRC`
+in both paths with `P2CRC`, `P5CRC`, `P3NAT`, or `P5NAT` to process another sample.
+
+### Training with released configurations
+
+Use the dataset's `default.yaml` and set `train.output_dir` to a separate output
+directory for each run. Continue from the same `data/` directory:
 
 ```bash
-python "$SAMI_CODE/train.py" --backend tiled \
+# Mouse embryonic brain
+python ../train.py \
+  --config sami/Mouse_Embryonic_Brain/E11_0-S1/default.yaml
+
+# Xenium renal carcinoma
+python ../train.py --backend tiled \
+  --config sami/Xenium_Renal_Carcinoma/default.yaml
+
+# CRC Visium HD: joint training across all five samples
+python ../train.py --backend tiled \
   --config sami/CRC_VisiumHD/default.yaml
 ```
-
-Check the configuration's `train.output_dir` before starting a training run.
-Use a writable experiment location when training from a read-only data mount.
-The shared CRC RNA transform records the selected genes and PCA parameters;
-model execution reads already transformed features from each processed HDF5.
 
 ## Preparing inputs and clustering
 
