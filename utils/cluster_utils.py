@@ -29,7 +29,7 @@ def mclust_R(adata, num_cluster, modelNames='EEE', used_obsm='z', random_seed=20
 
     X = adata.obsm[used_obsm]
 
-    # 防止是稀疏矩阵或其他类型
+    # Convert sparse matrices and other array-like inputs to a NumPy array.
     if hasattr(X, "toarray"):
         X = X.toarray()
     X = np.asarray(X)
@@ -38,13 +38,13 @@ def mclust_R(adata, num_cluster, modelNames='EEE', used_obsm='z', random_seed=20
         X = PCA(n_components=n_comp, random_state=2026).fit_transform(X)
         adata.obsm['z_pca_for_mclust'] = X
 
-    # 新版 rpy2 的推荐写法
+    # Use the local conversion context recommended for recent rpy2 versions.
     with localconverter(default_converter + numpy2ri.converter):
         r_X = robjects.conversion.py2rpy(X)
 
     res = rmclust(r_X, num_cluster, modelNames)
 
-    # 更稳妥地按名字取 classification
+    # Retrieve classifications by name to avoid relying on their position.
     mclust_res = np.array(res.rx2('classification'))
 
     adata.obs['mclust'] = mclust_res
@@ -64,81 +64,81 @@ def refine_label(
     include_self=False
 ):
     """
-    基于空间最近邻多数投票进行标签平滑/细化。
+    Smooth or refine labels by majority voting among spatial nearest neighbors.
 
     Parameters
     ----------
     adata : AnnData
-        输入的 AnnData 对象，adata.obs 中需要包含坐标列和标签列。
+        Input AnnData object with coordinate and label columns in adata.obs.
     n_neighbors : int, default=50
-        用于多数投票的邻居数。
+        Number of neighbors used for majority voting.
     key : str, default='label'
-        原始标签所在的 adata.obs 列名。
+        Column in adata.obs containing the original labels.
     x_key : str, default='x_array'
-        x 坐标列名。
+        Column containing x coordinates.
     y_key : str, default='y_array'
-        y 坐标列名。
+        Column containing y coordinates.
     new_key : str or None, default=None
-        如果提供，则把 refined label 写入 adata.obs[new_key]。
-        如果为 None，则只返回结果，不写入 adata。
+        If provided, write the refined labels to adata.obs[new_key].
+        If None, return the labels without modifying adata.
     include_self : bool, default=False
-        投票时是否包含自己。
+        Whether to include the observation itself in the vote.
 
     Returns
     -------
     new_labels : np.ndarray
-        细化后的标签数组（字符串类型）。
+        Array of refined labels as strings.
     """
-    # -------- 1. 基本检查 --------
+    # -------- 1. Validate inputs --------
     for col in [key, x_key, y_key]:
         if col not in adata.obs.columns:
-            raise ValueError(f"adata.obs 中缺少列: {col}")
+            raise ValueError(f"Missing column in adata.obs: {col}")
 
     labels = adata.obs[key].astype(str).to_numpy()
     coords = adata.obs[[x_key, y_key]].to_numpy(dtype=np.float64)
 
     n_cells = coords.shape[0]
     if n_cells == 0:
-        raise ValueError("adata 为空，没有观测点。")
+        raise ValueError("adata is empty and contains no observations.")
 
     if n_neighbors <= 0:
-        raise ValueError("n_neighbors 必须是正整数。")
+        raise ValueError("n_neighbors must be a positive integer.")
 
-    # 如果不包含自己，实际查询时需要多取一个邻居（因为最近的第一个通常是自己）
+    # Query one extra neighbor when excluding self, which is usually the nearest.
     query_k = n_neighbors + 1 if not include_self else n_neighbors
     query_k = min(query_k, n_cells)
 
-    # -------- 2. 建立近邻搜索 --------
+    # -------- 2. Set up the nearest-neighbor search --------
     nbrs = NearestNeighbors(n_neighbors=query_k, algorithm='auto', metric='euclidean')
     nbrs.fit(coords)
     indices = nbrs.kneighbors(coords, return_distance=False)
 
-    # -------- 3. 编码标签，提高多数投票效率 --------
+    # -------- 3. Encode labels for efficient majority voting --------
     label_codes, unique_labels = pd.factorize(labels, sort=False)
     new_codes = np.empty(n_cells, dtype=label_codes.dtype)
 
-    # -------- 4. 对每个点做邻居多数投票 --------
+    # -------- 4. Apply neighbor majority voting to each observation --------
     for i in range(n_cells):
         neigh_idx = indices[i]
 
         if not include_self:
-            # 去掉自己（通常第一个就是自己，但为了稳妥再过滤一次）
+            # Explicitly exclude self rather than assuming it is the first neighbor.
             neigh_idx = neigh_idx[neigh_idx != i]
 
-        # 如果样本很少，可能过滤自己后不足 n_neighbors 个，就直接用剩余的
+        # Use up to n_neighbors, or all remaining neighbors for small samples.
         if len(neigh_idx) > n_neighbors:
             neigh_idx = neigh_idx[:n_neighbors]
 
         neigh_codes = label_codes[neigh_idx]
 
-        # bincount 做多数投票，比 Python list.count 快很多
+        # Count votes with NumPy's bincount for efficient majority voting.
         counts = np.bincount(neigh_codes)
         majority_code = counts.argmax()
         new_codes[i] = majority_code
 
     new_labels = unique_labels[new_codes].astype(str)
 
-    # -------- 5. 可选：写回 adata --------
+    # -------- 5. Optionally write the labels back to adata --------
     if new_key is not None:
         adata.obs[new_key] = new_labels
 
