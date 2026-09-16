@@ -140,59 +140,40 @@ python ../train.py --backend tiled \
 
 ## Preparing inputs and clustering
 
-The public preprocessing package contains reusable image feature extraction and
-spatial graph partitioning. Dataset-specific Xenium and CRC preparation
-pipelines are not included. Released inputs already contain their prepared
-features and tiles, so they do not require these steps.
+Released inputs already include extracted features and spatial tiles. For your
+own data, run the examples below from the repository root.
 
-`preprocessing.image_features.extract_gpfm_features` accepts an image and an
-`(N, 2)` array of pixel coordinates in `(x, y)` order, measured from the top-left
-corner of that image. A single point is `[[x, y]]`. It extracts a square patch
-around each point and uses GPFM to write an `(N, 1024)` feature matrix to HDF5.
-The image reader accepts 8-bit RGB, RGBA, or grayscale tissue images, including
-TIFF, PNG, and JPEG, and reads the first page by default. It does not infer
-registration or pixel scale; convert physical coordinates or array indices
-into image pixels beforehand.
-`transform_coordinates` can apply a supplied 3x3 matrix in that direction.
+### H&E feature extraction
 
-For example, from the code directory with the image and GPFM weights available:
+Follow the [GPFM repository](https://github.com/birkhoffkiki/GPFM) instructions
+to download the pretrained weights and save them as `checkpoints/GPFM.pth`.
+Prepare an 8-bit H&E image and `data/pixel_coords.npy`, an `(N, 2)` array of
+aligned `(x, y)` pixel coordinates measured from the image's top-left corner.
 
 ```python
-import h5py
 import numpy as np
 from preprocessing.image_features import extract_gpfm_features
 
 extract_gpfm_features(
     image_path="data/tissue.tif",
-    pixel_coords=np.asarray([[1000, 2000]], dtype=np.float32),
-    output_h5="features.h5",
+    pixel_coords=np.load("data/pixel_coords.npy"),
+    output_h5="data/he_features.h5",
     checkpoint="checkpoints/GPFM.pth",
     patch_size=224,
     device_name="cuda",
 )
-with h5py.File("features.h5", "r") as handle:
-    features = handle["path_feat"][:]  # Shape: (1, 1024).
 ```
 
-Choose the square crop size with `patch_size`, a positive integer measured in
-source-image pixels. The default, `patch_size=224`, crops 224x224 directly without
-resizing; other sizes, such as 112, 256, or 512, crop the requested area and
-then resize it to 224x224 for GPFM. Image boundaries are padded with zeros, and
-`path_valid_fraction` records how much of each patch was inside the image.
-Feature rows follow the input coordinate order. Extraction resumes from
-`path_feat_completed_rows`; reuse the same output only with the same image,
-coordinates, checkpoint, and settings. Changing the crop size requires a new
-output file; existing features with a different or unrecorded crop size cannot
-be resumed. Create the output directory first if
-using a nested path. An image-only feature file does not include the coordinates
-and omics features required by the tiled data loader.
+The output stores an `(N, 1024)` feature matrix under `path_feat`, in the same
+order as the coordinates. For full-graph training, copy these features into
+the H5AD `obsm` entry selected by your configuration.
 
-`preprocessing.graph_partition` builds a spatial neighbor graph from an HDF5
-`coords` dataset of shape `(N, 2)`, partitions its nodes, and adds neighboring
-context to each tile. It writes graph and tile NPZ files plus `manifest.json`.
-To use that manifest for training, the HDF5 must also contain the modality
-features required by the selected `data.mode`. RNA+H&E and three-modality
-loaders require all image feature rows to be complete.
+### Spatial tiling
+
+For tiled training, prepare `data/processed.h5` with `coords` of shape `(N, 2)`,
+`rna_feat`, and `protein_feat` and/or `path_feat` according to `data.mode`.
+All feature rows must follow the coordinate order. If using H&E, also copy the
+`path_feat_completed_rows` attribute from the completed extraction output.
 
 ```bash
 python -m preprocessing.graph_partition \
@@ -201,8 +182,14 @@ python -m preprocessing.graph_partition \
   --tile-dir data/tiles --sample-id sample
 ```
 
-For mclust clustering, use `utils.cluster_utils.mclust_R`. Spatial labels can
-be refined with `utils.cluster_utils.refine_label`.
+This writes the spatial graph, tile NPZ files, and `data/tiles/manifest.json`.
+Set `data.tile_manifest` in your tiled training configuration to this manifest.
+
+### Clustering
+
+Use `utils.cluster_utils.mclust_R` to cluster the learned `adata.obsm['z']`
+embeddings, setting `num_cluster` to your desired cluster count. Optionally use
+`utils.cluster_utils.refine_label` to refine the labels by spatial majority voting.
 
 ## Tests
 
