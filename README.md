@@ -1,89 +1,58 @@
 # SAMI
 
-SAMI learns spatial multi-omics embeddings with full-graph and tiled training
-backends. This repository contains model code, training and inference entrypoints,
-input preparation, and mclust clustering utilities. Datasets, pretrained
-weights, and experiment outputs are distributed separately.
+SAMI (Spatially-Aware Multi-Modal Integration) is a framework for integrating
+histological features, spatial omics profiles, and tissue spatial relationships
+to learn unified spot- or cell-level representations. It combines
+neighborhood-restricted cross-modal attention, spatial neighborhood aggregation,
+and layer-wise aggregation to capture complementary information across modalities
+alongside local detail and broader tissue structure. Across diverse tissues,
+platforms, and spatial resolutions, SAMI supports spatial domain identification
+and downstream analyses of cellular heterogeneity and functional microenvironments.
 
 ## Installation
 
-Use Python 3.10 (reference: Python 3.10.19 in `gst_py310`), with PyTorch
-`2.9.1+cu126`, torchvision `0.24.1+cu126`, and PyTorch Geometric `2.7.0`.
-`environment.yml` contains Python, the runtime Python packages, and the R and
-libvips dependencies for clustering and image preprocessing. Conda installs the
-system dependencies before installing the packages in the `pip` section.
-Transitive dependencies, such as Scanpy's matplotlib dependency, are installed
-automatically.
+SAMI uses Python 3.10 and PyTorch 2.9.1. Install all dependencies using the
+provided [environment.yml](environment.yml):
 
 ```bash
 conda env create -f environment.yml
 conda activate sami
 ```
 
-The YAML pins the public PyTorch and torchvision versions. To select the
-reference CUDA 12.6 builds explicitly, run the following after activation:
-
-```bash
-python -m pip install torch==2.9.1+cu126 torchvision==0.24.1+cu126 \
-  --index-url https://download.pytorch.org/whl/cu126
-```
-
-Use the [PyTorch installer](https://pytorch.org/get-started/locally/) for a
-different platform. Existing PyTorch installations that satisfy the pinned
-versions can be retained. The existing reference `gst_py310` environment can
-also be activated directly.
-When a Linux GPU container needs explicit driver-library search paths, apply
-these settings before launching Python:
-
-```bash
-export NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}"
-export LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-```
-
-The container runtime must also expose the GPU; these settings alone do not
-grant device access.
-
-GPFM image feature extraction uses torchvision, timm, and pyvips from
-`environment.yml`, which also installs the `libvips` system library. Obtain
-GPFM weights separately and place them at `checkpoints/GPFM.pth` or supply an
-explicit checkpoint path. These weights are only needed when extracting image
-features; released inputs already contain those features.
-
-The mclust helpers use R 4.3.3 and mclust 6.1.1, both included in the environment
-file. Activate the environment before running them so that `R` is on `PATH`.
-Calling an environment's Python executable alone does not activate its R
-installation.
-
-Runtime versions are matched to `gst_py310`; pyvips is also included for the
-released image preprocessing code.
-
-## Project layout
-
-```text
-train.py / infer.py                 Shared command dispatch
-tri_train.py / tri_infer.py         Dedicated three-modality commands
-engines/full_graph/                Original whole-sample execution
-engines/tiled/                     Tile training and stitched inference
-datasets/                         Full-graph and tile data loaders
-models/                           Encoders, attention, fusion, decoders
-losses/                           Reconstruction and representation losses
-utils/                            Graph, configuration, and clustering helpers
-configs/                          Generic dual- and three-modality full-graph examples
-preprocessing/                    Spatial graph tiles and GPFM image features
-tests/                            Regression and smoke tests
-```
-
-The two backends have separate training loops, graph construction, loss
-handling, and inference outputs. The root commands select a backend and forward
-its arguments. Tiled data loading, attention, models, and losses live alongside
-their full-graph counterparts in the shared directories. Existing model member
-names and checkpoint parameter keys are retained.
-
 ## Training and inference
 
-`--backend full` is the default. Pass `--backend tiled` explicitly for a tile
-manifest. A configuration error does not cause automatic backend switching.
-Use the help for the selected backend to see its own options:
+For full-graph training and inference, prepare an `.h5ad` file with the following
+entries. All feature matrices must follow the same spot or cell order.
+
+| H5AD entry | Contents | Configuration key |
+| --- | --- | --- |
+| `obs['x_array']`, `obs['y_array']` | Spatial coordinates | Fixed names |
+| `obsm['omics1_feat']` | First-modality features, shape `(N, D1)` | `data.omics1_obsm_key` |
+| `obsm['omics2_feat']` | Second-modality features, shape `(N, D2)` | `data.omics2_obsm_key` |
+| `obsm['omics3_feat']` | Third-modality features, shape `(N, D3)`; three-modality runs only | `data.omics3_obsm_key` |
+
+The `omics*_feat` names are examples; set the configuration keys to match your
+`obsm` entries. Reconstruction targets can use the same features or separate
+`obsm` entries selected by `data.omics*_target_obsm_key`.
+
+Tiled execution uses a manifest, processed HDF5 files, and NPZ tiles. For prepared
+inputs and matching configurations, see [Using the released data](#using-the-released-data).
+
+Start from [configs/default.yaml](configs/default.yaml) for two modalities or
+[configs/tri_modal_default.yaml](configs/tri_modal_default.yaml) for three
+modalities. Both templates use the full-graph backend. Update:
+
+- `data`: training, validation, and inference paths (`train_dir`, `val_dir`,
+  `infer_dir`), plus the feature and target keys above.
+- `model`, `train`, and `loss`: model settings, device, epochs, learning rate,
+  output directory, and loss weights for your data.
+- `infer`: checkpoint and output paths.
+
+Relative paths resolve from the working directory. Dimensions set to `null`
+are inferred from the first sample; keep `data.batch_size: 1`.
+
+The default backend is `full`; select `--backend tiled` for tiled inputs.
+View the available options with:
 
 ```bash
 python train.py --help
@@ -92,50 +61,17 @@ python tri_train.py --backend tiled --help
 python tri_infer.py --help
 ```
 
-| Commands | Full backend | Tiled backend |
-| --- | --- | --- |
-| `train.py`, `infer.py` | Whole-sample H5AD and single/dual-modality branches | RNA+protein, RNA+H&E, or RNA+protein+H&E tiles |
-| `tri_train.py`, `tri_infer.py` | Dedicated three-modality model | Requires `data.mode: rna_protein_he` |
-
-Full-graph H5AD inputs provide spatial coordinates in `obs['x_array']` and
-`obs['y_array']`, with feature/target matrices in `obsm` selected by the
-configuration's `*_obsm_key` fields.
-Tiled inputs use a manifest, processed HDF5 files, and tile NPZ files with global
-cell indices, neighborhoods, and core masks. Manifest paths must resolve from
-the working directory, including paths inside every manifest record.
-
-Example commands from the code directory, after preparing the referenced data:
+After updating the templates, run from the repository directory:
 
 ```bash
+# Two modalities
 python train.py --config configs/default.yaml
+python infer.py --config configs/default.yaml
+
+# Three modalities
 python tri_train.py --config configs/tri_modal_default.yaml
+python tri_infer.py --config configs/tri_modal_default.yaml
 ```
-
-The two files in `configs/` are generic examples for `--backend full`. The dual
-example defaults to `multimodal_fusion`; the three-modality example uses
-`trimodal_fusion`. Adjust data paths and the `omics*_feat` example keys to match
-your H5AD inputs. Input and target dimensions set to `null` are inferred from
-the first sample. Hyperparameters, including loss weights, are starting values
-to tune for your data. Dataset-specific configurations are distributed with the
-released data; use those for reproduction and tiled training, as shown below.
-
-Preserve model dimensions and architecture when reusing a checkpoint. In full
-inference, the YAML locates the checkpoint, and its saved configuration takes
-precedence when present; existing CLI overrides such as
-`--input_dir` and output paths still apply. Tile inference reads its model and
-manifest configuration from the checkpoint itself and accepts `--checkpoint`,
-`--output`, and `--device`.
-
-Full inference writes its PT result bundle to `infer.output_path`, which can be
-overridden with `--output_path`. The dual template writes per-sample H5AD files
-under `infer.output_dir_h5ad`; override that directory with `--output_dir_h5ad`.
-When no H5AD output directory is configured, dual inference accepts
-`--output_path_h5ad` for a single input file. The three-modality template uses
-`infer.output_path_h5ad`, overridable with `--output_path_h5ad`. Tiled inference
-stitches overlapping tiles by the original weighting rule and writes
-an H5AD plus a `.qc.json` sidecar. Both provide the joint embedding in
-`obsm['z']`. New inference generates embeddings; it does not regenerate the
-paper's selected clustering labels.
 
 ## Using the released data
 
