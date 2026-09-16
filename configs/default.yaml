@@ -1,0 +1,116 @@
+# Generic two-modality example for --backend full.
+# Paths are relative to the working directory; use dataset configs for reproduction.
+seed: 42
+
+data:
+  train_dir: "data/train.h5ad"
+  val_dir: "" # Optional validation H5AD file or directory.
+  infer_dir: "data/infer.h5ad"
+  file_pattern: "*.h5ad"
+  # Replace these example keys with the corresponding entries in adata.obsm.
+  omics1_obsm_key: "omics1_feat"
+  omics2_obsm_key: "omics2_feat"
+  # Use the input features as reconstruction targets, or specify separate keys.
+  omics1_target_obsm_key: "omics1_feat"
+  omics2_target_obsm_key: "omics2_feat"
+  batch_size: 1 # The full backend requires one graph per batch.
+  num_workers: 0
+  pin_memory: false
+
+model:
+  branch_mode: "multimodal_fusion" # Options: "omics1", "omics2", "multimodal_fusion"
+  hidden_dim: 64
+  # null infers feature and target dimensions from the first input sample.
+  omics1_in_dim: null
+  omics2_in_dim: null
+  omics1_target_dim: null
+  omics2_target_dim: null
+
+  omics1_encoder:
+    feature_adapter:
+      adapter_type: "mlp_bottleneck"
+      adapter_dim: 1024
+      dropout: 0.1
+      force_linear: false
+
+  omics1_augmentation:
+    enabled: false
+    alpha: 0.5
+
+  omics2_encoder:
+    adapter_type: "mlp_bottleneck"
+    adapter_dim: 512
+    dropout: 0.1
+    force_linear: false
+
+  graph:
+    top_k: 6
+    symmetrize: true
+    add_self_loops: false
+    chunk_size: 512
+
+  graph_backbone:
+    omics1:
+      type: "pointnext"
+      use_layer_transformer: true
+    omics2:
+      type: "pointnext"
+      use_layer_transformer: true
+    pointnext:
+      expansion: 4
+      dropout: 0.1
+      max_neighbors: null
+      pooling: "mean"
+
+  cross_modal_attention:
+    num_heads: 4
+    dropout: 0.1
+
+  gat:
+    num_layers: 3
+    omics1_num_layers: 3
+    omics2_num_layers: 3
+    num_heads: 4
+    dropout: 0.1
+    leaky_relu_negative_slope: 0.2
+
+  layer_transformer:
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.1
+    pooling: "mean"
+
+  fusion:
+    mlp_hidden_dim: 256
+    dropout: 0.1
+
+train:
+  device: "cuda"
+  epochs: 300
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  grad_clip_norm: 5.0
+  amp: false
+  log_interval: 10
+  output_dir: "outputs/dual_modal"
+
+loss:
+  # Example weights; adjust for each modality's target scale and task.
+  lambda_omics1: 1.0
+  lambda_omics2: 1.0
+  lambda_contrastive: 1.0
+  lambda_consistency: 0.1
+
+  contrastive:
+    use_symmetric_loss: false
+
+  consistency:
+    temperature: 0.1
+    projector_hidden_dim: 128
+    projector_out_dim: 64
+
+infer:
+  checkpoint_path: "outputs/dual_modal/best.pt"
+  output_path: "outputs/dual_modal/infer_embeddings.pt"
+  output_dir_h5ad: "outputs/dual_modal/infer_h5ad"
+  save_reconstruction: false
