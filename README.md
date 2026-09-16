@@ -138,17 +138,12 @@ python ../train.py --backend tiled \
   --config sami/CRC_VisiumHD/default.yaml
 ```
 
-## Preparing inputs and clustering
-
-Released inputs already include extracted features and spatial tiles. For your
-own data, run the examples below from the repository root.
-
-### H&E feature extraction
+## Preparing H&E features
 
 Follow the [GPFM repository](https://github.com/birkhoffkiki/GPFM) instructions
 to download the pretrained weights and save them as `checkpoints/GPFM.pth`.
-Prepare an 8-bit H&E image and `data/pixel_coords.npy`, an `(N, 2)` array of
-aligned `(x, y)` pixel coordinates measured from the image's top-left corner.
+Prepare an 8-bit H&E image and an `(N, 2)` array of aligned `(x, y)` pixel
+coordinates measured from the image's top-left corner.
 
 ```python
 import numpy as np
@@ -166,39 +161,5 @@ extract_gpfm_features(
 
 The output stores an `(N, 1024)` feature matrix under `path_feat`, in the same
 order as the coordinates. For full-graph training, copy these features into
-the H5AD `obsm` entry selected by your configuration.
-
-### Spatial tiling
-
-For tiled training, prepare `data/processed.h5` with `coords` of shape `(N, 2)`,
-`rna_feat`, and `protein_feat` and/or `path_feat` according to `data.mode`.
-All feature rows must follow the coordinate order. If using H&E, also copy the
-`path_feat_completed_rows` attribute from the completed extraction output.
-
-```bash
-python -m preprocessing.graph_partition \
-  --processed-h5 data/processed.h5 \
-  --graph-path data/graphs/spatial_knn.npz \
-  --tile-dir data/tiles --sample-id sample
-```
-
-This writes the spatial graph, tile NPZ files, and `data/tiles/manifest.json`.
-Set `data.tile_manifest` in your tiled training configuration to this manifest.
-
-### Clustering
-
-Use `utils.cluster_utils.mclust_R` to cluster the learned `adata.obsm['z']`
-embeddings, setting `num_cluster` to your desired cluster count. Optionally use
-`utils.cluster_utils.refine_label` to refine the labels by spatial majority voting.
-
-## Tests
-
-After creating and activating the environment, run from the code directory:
-
-```bash
-python -m pip install pytest==9.1.1
-python -m pytest tests
-```
-
-Tests use small synthetic inputs and temporary output directories. They cover
-tile boundaries and losses as well as the command routing and model workflows.
+the H5AD `obsm` entry selected by your configuration. For tiled training, place
+`path_feat` in the processed HDF5 file alongside the other modality features.
